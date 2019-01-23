@@ -45,6 +45,24 @@ AShooterCharacter::AShooterCharacter(const FObjectInitializer& ObjectInitializer
 	Mesh1P->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Mesh1P->SetCollisionResponseToAllChannels(ECR_Ignore);
 
+	ThirdPersonCameraArm = ObjectInitializer.CreateDefaultSubobject<USpringArmComponent>(this, TEXT("ThirdPersonCameraArm"));
+	ThirdPersonCameraArm->TargetOffset = FVector(0.f, 0.f, 0.f);
+	ThirdPersonCameraArm->SetRelativeLocation(FVector(-40.f, 0.f, 160.f));
+	ThirdPersonCameraArm->SetRelativeRotation(FRotator(-10.f, 0.f, 0.f));
+	ThirdPersonCameraArm->AttachTo(GetMesh()); // attach it to the third person mesh
+	ThirdPersonCameraArm->TargetArmLength = 200.f;
+	ThirdPersonCameraArm->bEnableCameraLag = false;
+	ThirdPersonCameraArm->bEnableCameraRotationLag = false;
+	ThirdPersonCameraArm->bUsePawnControlRotation = true; // let the controller handle the view rotation
+	ThirdPersonCameraArm->bInheritYaw = true;
+	ThirdPersonCameraArm->bInheritPitch = true;
+	ThirdPersonCameraArm->bInheritRoll = false;
+
+	ThirdPersonCamera = ObjectInitializer.CreateDefaultSubobject<UCameraComponent>(this, TEXT("ThirdPersonCamera"));
+	ThirdPersonCamera->AttachTo(ThirdPersonCameraArm, USpringArmComponent::SocketName);
+	ThirdPersonCamera->bUsePawnControlRotation = false; // the arm is already doing the rotation
+	ThirdPersonCamera->FieldOfView = 90.f;
+
 	GetMesh()->bOnlyOwnerSee = false;
 	GetMesh()->bOwnerNoSee = true;
 	GetMesh()->bReceivesDecals = false;
@@ -63,6 +81,7 @@ AShooterCharacter::AShooterCharacter(const FObjectInitializer& ObjectInitializer
 	RunningSpeedModifier = 1.5f;
 	bWantsToRun = false;
 	bWantsToFire = false;
+	bIsThirdPerson = false;
 	LowHealthPercentage = 0.5f;
 
 	BaseTurnRate = 45.f;
@@ -187,6 +206,13 @@ void AShooterCharacter::UpdatePawnMeshes()
 
 	GetMesh()->VisibilityBasedAnimTickOption = bFirstPerson ? EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered : EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 	GetMesh()->SetOwnerNoSee(bFirstPerson);
+
+	bFindCameraComponentWhenViewTarget = !bFirstPerson;
+
+	if (CurrentWeapon)
+	{
+		CurrentWeapon->UpdateMeshes();
+	}
 }
 
 void AShooterCharacter::UpdateTeamColors(UMaterialInstanceDynamic* UseMID)
@@ -203,6 +229,18 @@ void AShooterCharacter::UpdateTeamColors(UMaterialInstanceDynamic* UseMID)
 }
 
 void AShooterCharacter::OnCameraUpdate(const FVector& CameraLocation, const FRotator& CameraRotation)
+{
+	if (IsFirstPerson())
+	{
+		UpdateCameraFirstPerson(CameraLocation, CameraRotation);
+	}
+	else
+	{
+		UpdateCameraThirdPerson(CameraLocation, CameraRotation);
+	}
+}
+
+void AShooterCharacter::UpdateCameraFirstPerson(const FVector& CameraLocation, const FRotator& CameraRotation)
 {
 	USkeletalMeshComponent* DefMesh1P = Cast<USkeletalMeshComponent>(GetClass()->GetDefaultSubobjectByName(TEXT("PawnMesh1P")));
 	const FMatrix DefMeshLS = FRotationTranslationMatrix(DefMesh1P->RelativeRotation, DefMesh1P->RelativeLocation);
@@ -221,6 +259,13 @@ void AShooterCharacter::OnCameraUpdate(const FVector& CameraLocation, const FRot
 	Mesh1P->SetRelativeLocationAndRotation(PitchedMesh.GetOrigin(), PitchedMesh.Rotator());
 }
 
+void AShooterCharacter::UpdateCameraThirdPerson(const FVector& CameraLocation, const FRotator& CameraRotation)
+{
+	if (Controller && ThirdPersonCamera)
+	{
+		ThirdPersonCamera->FieldOfView = Cast<AShooterPlayerController>(Controller)->PlayerCameraManager->DefaultFOV;
+	}
+}
 
 //////////////////////////////////////////////////////////////////////////
 // Damage & death
@@ -764,6 +809,18 @@ void AShooterCharacter::SetRunning(bool bNewRunning, bool bToggle)
 	}
 }
 
+void AShooterCharacter::SetThirdPerson(bool bNewThirdPerson)
+{
+	bIsThirdPerson = bNewThirdPerson;
+	UpdatePawnMeshes();
+
+	if (Role < ROLE_Authority)
+	{
+		ServerSetThirdPerson(bNewThirdPerson);
+	}
+}
+
+
 bool AShooterCharacter::ServerSetRunning_Validate(bool bNewRunning, bool bToggle)
 {
 	return true;
@@ -772,6 +829,16 @@ bool AShooterCharacter::ServerSetRunning_Validate(bool bNewRunning, bool bToggle
 void AShooterCharacter::ServerSetRunning_Implementation(bool bNewRunning, bool bToggle)
 {
 	SetRunning(bNewRunning, bToggle);
+}
+
+bool AShooterCharacter::ServerSetThirdPerson_Validate(bool bNewThirdPerson)
+{
+	return true;
+}
+
+void AShooterCharacter::ServerSetThirdPerson_Implementation(bool bNewThirdPerson)
+{
+	SetThirdPerson(bNewThirdPerson);
 }
 
 void AShooterCharacter::UpdateRunSounds()
@@ -870,6 +937,10 @@ void AShooterCharacter::SetupPlayerInputComponent(class UInputComponent* PlayerI
 	PlayerInputComponent->BindAction("Run", IE_Pressed, this, &AShooterCharacter::OnStartRunning);
 	PlayerInputComponent->BindAction("RunToggle", IE_Pressed, this, &AShooterCharacter::OnStartRunningToggle);
 	PlayerInputComponent->BindAction("Run", IE_Released, this, &AShooterCharacter::OnStopRunning);
+
+	PlayerInputComponent->BindAction("ThirdPerson", IE_Pressed, this, &AShooterCharacter::OnThirdPerson);
+	PlayerInputComponent->BindAction("ThirdPersonToggle", IE_Pressed, this, &AShooterCharacter::OnThirdPersonToggle);
+	PlayerInputComponent->BindAction("ThirdPerson", IE_Released, this, &AShooterCharacter::OnFirstPerson);
 }
 
 
@@ -1028,6 +1099,29 @@ void AShooterCharacter::OnStartRunningToggle()
 void AShooterCharacter::OnStopRunning()
 {
 	SetRunning(false, false);
+}
+
+void AShooterCharacter::OnThirdPerson()
+{
+	AShooterPlayerController* MyPC = Cast<AShooterPlayerController>(Controller);
+	if (MyPC && MyPC->IsGameInputAllowed())
+	{
+		SetThirdPerson(true);
+	}
+}
+
+void AShooterCharacter::OnThirdPersonToggle()
+{
+	AShooterPlayerController* MyPC = Cast<AShooterPlayerController>(Controller);
+	if (MyPC && MyPC->IsGameInputAllowed())
+	{
+		SetThirdPerson(!bIsThirdPerson);
+	}
+}
+
+void AShooterCharacter::OnFirstPerson()
+{
+	SetThirdPerson(false);
 }
 
 bool AShooterCharacter::IsRunning() const
@@ -1255,7 +1349,7 @@ bool AShooterCharacter::IsFiring() const
 
 bool AShooterCharacter::IsFirstPerson() const
 {
-	return IsAlive() && Controller && Controller->IsLocalPlayerController();
+	return IsAlive() && Controller && Controller->IsLocalPlayerController() && !bIsThirdPerson;
 }
 
 int32 AShooterCharacter::GetMaxHealth() const

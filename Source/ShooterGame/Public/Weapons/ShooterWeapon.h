@@ -141,6 +141,8 @@ class AShooterWeapon : public AActor
 	/** check if mesh is already attached */
 	bool IsAttachedToPawn() const;
 
+	/** update the meshes visibility */
+	void UpdateMeshes();
 
 	//////////////////////////////////////////////////////////////////////////
 	// Input

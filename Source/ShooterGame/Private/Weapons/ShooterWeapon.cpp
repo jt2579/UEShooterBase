@@ -104,6 +104,7 @@ void AShooterWeapon::OnEquip(const AShooterWeapon* LastWeapon)
 	if (MyPawn && MyPawn->IsLocallyControlled())
 	{
 		PlayWeaponSound(EquipSound);
+		UpdateMeshes();
 	}
 
 	AShooterCharacter::NotifyEquipWeapon.Broadcast(MyPawn, this);
@@ -803,18 +804,35 @@ void AShooterWeapon::SimulateWeaponFire()
 			if( (MyPawn != NULL ) && ( MyPawn->IsLocallyControlled() == true ) )
 			{
 				AController* PlayerCon = MyPawn->GetController();				
-				if( PlayerCon != NULL )
+				if (PlayerCon != NULL)
 				{
-					Mesh1P->GetSocketLocation(MuzzleAttachPoint);
-					MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, Mesh1P, MuzzleAttachPoint);
-					MuzzlePSC->bOwnerNoSee = false;
-					MuzzlePSC->bOnlyOwnerSee = true;
+					const bool isFirstPerson = MyPawn->IsFirstPerson();
 
+					// <GB> In first person, this will be the Shooting player's effect
+					if (isFirstPerson)
+					{
+						Mesh1P->GetSocketLocation(MuzzleAttachPoint);
+						MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, Mesh1P, MuzzleAttachPoint);
+						MuzzlePSC->bOwnerNoSee = false;
+						MuzzlePSC->bOnlyOwnerSee = true;
+					}
+
+					// <GB> In third person, this will be the Other player's effect
+					else
+					{
+						Mesh3P->GetSocketLocation(MuzzleAttachPoint);
+						MuzzlePSC = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, Mesh3P, MuzzleAttachPoint);
+						MuzzlePSC->bOwnerNoSee = true;
+						MuzzlePSC->bOnlyOwnerSee = false;
+					}
+
+					// <GB> In first person, this will be the Other player's effect
+					// <GB> In third person, this will be the Shooting player's effect
 					Mesh3P->GetSocketLocation(MuzzleAttachPoint);
 					MuzzlePSCSecondary = UGameplayStatics::SpawnEmitterAttached(MuzzleFX, Mesh3P, MuzzleAttachPoint);
-					MuzzlePSCSecondary->bOwnerNoSee = true;
-					MuzzlePSCSecondary->bOnlyOwnerSee = false;				
-				}				
+					MuzzlePSCSecondary->bOwnerNoSee = isFirstPerson;
+					MuzzlePSCSecondary->bOnlyOwnerSee = !isFirstPerson;
+				}
 			}
 			else
 			{
@@ -917,6 +935,16 @@ bool AShooterWeapon::IsEquipped() const
 bool AShooterWeapon::IsAttachedToPawn() const
 {
 	return bIsEquipped || bPendingEquip;
+}
+
+void AShooterWeapon::UpdateMeshes()
+{
+	if (MyPawn)
+	{
+		const bool bFirstPerson = MyPawn->IsFirstPerson();
+		Mesh1P->SetOwnerNoSee(!bFirstPerson);
+		Mesh3P->SetOwnerNoSee(bFirstPerson);
+	}
 }
 
 EWeaponState::Type AShooterWeapon::GetCurrentState() const
